@@ -1,33 +1,74 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+from dateutil import parser
+from io import StringIO
+import base64
 
-# Title
-st.title("Police Resource Allocation Dashboard")
-st.markdown("This dashboard shows recommended police deployment hours based on predicted burglary risk.")
+st.set_page_config(page_title="CleanCart - CSV Cleaner", layout="centered")
 
-# Sample data (you can later load this from a CSV instead)
-data = [
-    {"Area Code": "E01000005", "Ward Code": "E05009333", "Hours": 39.4, "Risk": 91},
-    {"Area Code": "E01000006", "Ward Code": "E05000035", "Hours": 73.1, "Risk": 18},
-    {"Area Code": "E01000008", "Ward Code": "E05000487", "Hours": 215.0, "Risk": 190},
-    {"Area Code": "E01000009", "Ward Code": "E05000035", "Hours": 475.1, "Risk": 117},
-    {"Area Code": "E01000013", "Ward Code": "E05000027", "Hours": 279.3, "Risk": 147},
-    {"Area Code": "E01000014", "Ward Code": "E05000037", "Hours": 283.5, "Risk": 112}
-]
+st.title("🧹 CleanCart")
+st.markdown("Upload your messy CSV file and get a cleaned version with a full report!")
 
-df = pd.DataFrame(data)
+def clean_csv(file):
+    df = pd.read_csv(file)
+    report = []
 
-# Filters
-min_risk = st.slider("Minimum Risk Level", min_value=0, max_value=200, value=0)
-filtered_df = df[df["Risk"] >= min_risk]
+    report.append(f"Original shape: {df.shape}")
+    # Remove duplicates
+    before = df.shape[0]
+    df = df.drop_duplicates()
+    report.append(f"Removed {before - df.shape[0]} duplicate rows.")
 
-# Table
-st.subheader("Deployment Recommendations")
-st.dataframe(filtered_df)
+    # Fill blank cells
+    blanks = df.isnull().sum().sum()
+    df.fillna("MISSING", inplace=True)
+    report.append(f"Filled {blanks} blank cells with 'MISSING'.")
 
-# Bar chart
-fig = px.bar(filtered_df, x="Area Code", y="Hours", color="Risk", title="Police Hours by Area Code")
-st.plotly_chart(fig)
+    # Date normalization
+    date_cols = []
+    for col in df.columns:
+        try:
+            parsed = df[col].apply(lambda x: parser.parse(str(x), fuzzy=True) if x != "MISSING" else x)
+            if all(isinstance(x, (pd.Timestamp, str)) for x in parsed):
+                df[col] = parsed.apply(lambda x: x.strftime("%Y-%m-%d") if isinstance(x, pd.Timestamp) else x)
+                date_cols.append(col)
+        except Exception:
+            continue
 
-#nice
+    if date_cols:
+        report.append(f"Standardized date format in: {', '.join(date_cols)}")
+    else:
+        report.append("No date columns found to standardize.")
+
+    return df, "\n".join(report)
+
+def generate_download_link(df, filename, label):
+    csv = df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">{label}</a>'
+    return href
+
+def generate_text_download(report, filename, label):
+    b64 = base64.b64encode(report.encode()).decode()
+    href = f'<a href="data:text/plain;base64,{b64}" download="{filename}">{label}</a>'
+    return href
+
+uploaded_file = st.file_uploader("📄 Upload your CSV file", type=["csv"])
+
+if uploaded_file is not None:
+    try:
+        cleaned_df, report = clean_csv(uploaded_file)
+
+        st.success("✅ File cleaned successfully!")
+
+        st.subheader("📊 Preview of Cleaned Data")
+        st.dataframe(cleaned_df.head())
+
+        st.subheader("📝 Cleaning Report")
+        st.text(report)
+
+        st.markdown(generate_download_link(cleaned_df, "cleaned_data.csv", "⬇️ Download Cleaned CSV"), unsafe_allow_html=True)
+        st.markdown(generate_text_download(report, "cleaning_report.txt", "⬇️ Download Cleaning Report"), unsafe_allow_html=True)
+
+    except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
